@@ -1,0 +1,32 @@
+export const strings = {
+  en: {
+    welcome: 'Welcome to',
+    appName: 'VijayConnect Driver',
+    login: 'Login',
+    register: 'Register',
+    footerText: "By Continuing, You Agree to the VijayConnect's Terms & Condition and Privacy Policy",
+    phoneNumber: 'Phone Number',
+    instruction: 'Please Enter Your Phone Number to Login',
+    sendOtp: 'Send OTP',
+    errorEmpty: 'Please enter your phone number',
+    errorInvalid: 'Phone number must be exactly 10 digits',
+    dashboard: 'Dashboard',
+    notification: 'Notification',
+    changeLanguage: 'Change Language',
+  },
+  ta: {
+    welcome: 'வரவேற்கிறோம்',
+    appName: 'விஜய் கனெக்ட் டிரைவர்',
+    login: 'உள்நுழைய',
+    register: 'பதிவு',
+    footerText: "தொடர்ந்து, நீங்கள் விஜய் கனெக்டின் விதிமுறைகள் மற்றும் தனியுரிமைக் கொள்கைக்கு உடன்படுகிறீர்கள்",
+    phoneNumber: 'தொலைபேசி எண்',
+    instruction: 'உள்நுழைய உங்கள் தொலைபேசி எண்ணை உள்ளிடவும்',
+    sendOtp: 'OTP அனுப்பவும்',
+    errorEmpty: 'உங்கள் தொலைபேசி எண்ணை உள்ளிடவும்',
+    errorInvalid: 'தொலைபேசி எண் 10 இலக்கங்கள் இருக்க வேண்டும்',
+    dashboard: 'டாஷ்போர்டு',
+    notification: 'அறிவிப்பு',
+    changeLanguage: 'மொழியை மாற்றவும்',
+  }
+};
