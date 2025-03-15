@@ -1,142 +1,216 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, Image, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Image,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  Platform,
+  PermissionsAndroid,
+} from 'react-native';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage'; // Import AsyncStorage
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const ProfilePhotoScreen = ({ navigation }) => {
   const [photo, setPhoto] = useState(null);
-  const [loading, setLoading] = useState(false); // To track loading state
+  const [loading, setLoading] = useState(false);
 
+  /************************************************************
+   * PERMISSIONS
+   ************************************************************/
+  const requestCameraPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: 'Camera Permission',
+            message: 'We need access to your camera for taking pictures.',
+            buttonPositive: 'OK',
+            buttonNegative: 'Cancel',
+          }
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.log('Camera permission error:', err);
+        return false;
+      }
+    }
+    // iOS automatically prompts
+    return true;
+  };
+
+  const requestGalleryPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        // For picking from gallery we often need READ_EXTERNAL_STORAGE
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+          {
+            title: 'Gallery Permission',
+            message: 'We need access to your photos for uploading.',
+            buttonPositive: 'OK',
+            buttonNegative: 'Cancel',
+          }
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.log('Gallery permission error:', err);
+        return false;
+      }
+    }
+    // iOS automatically prompts
+    return true;
+  };
+
+  /************************************************************
+   * SELECT PHOTO: Show Alert => Open Camera OR Gallery
+   ************************************************************/
   const handlePhotoSelection = () => {
-    Alert.alert(
-      "Upload Photo",
-      "Choose an option",
-      [
-        {
-          text: "Camera",
-          onPress: () => openCamera(),
-        },
-        {
-          text: "Gallery",
-          onPress: () => openGallery(),
-        },
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-      ]
-    );
+    Alert.alert('Upload Photo', 'Choose an option', [
+      { text: 'Camera', onPress: openCamera },
+      { text: 'Gallery', onPress: openGallery },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
-  const openCamera = () => {
-    console.log("Opening camera...");
-    launchCamera({ mediaType: 'photo', quality: 1 }, (response) => {
-      console.log("Camera response:", response);
-      if (!response.didCancel && !response.error) {
-        setPhoto(response.assets[0].uri);
-        console.log("Photo selected from camera:", response.assets[0].uri);
-      } else {
-        console.log("Camera selection canceled or error:", response.error);
-      }
+  const openCamera = async () => {
+    const hasPermission = await requestCameraPermission();
+    if (!hasPermission) {
+      Alert.alert('Permission Denied', 'Camera permission is required to take a photo.');
+      return;
+    }
+
+    const options = { mediaType: 'photo', quality: 1 };
+    launchCamera(options, response => {
+      handlePickerResponse(response, 'Camera');
     });
   };
 
-  const openGallery = () => {
-    console.log("Opening gallery...");
-    launchImageLibrary({ mediaType: 'photo', quality: 1 }, (response) => {
-      console.log("Gallery response:", response);
-      if (!response.didCancel && !response.error) {
-        setPhoto(response.assets[0].uri);
-        console.log("Photo selected from gallery:", response.assets[0].uri);
-      } else {
-        console.log("Gallery selection canceled or error:", response.error);
-      }
+  const openGallery = async () => {
+    const hasPermission = await requestGalleryPermission();
+    if (!hasPermission) {
+      Alert.alert('Permission Denied', 'Gallery permission is required to select a photo.');
+      return;
+    }
+
+    const options = { mediaType: 'photo', quality: 1 };
+    launchImageLibrary(options, response => {
+      handlePickerResponse(response, 'Gallery');
     });
   };
 
+  const handlePickerResponse = (response, source) => {
+    const { didCancel, errorCode, errorMessage, assets } = response;
+    if (didCancel) {
+      console.log(`${source} selection canceled.`);
+      return;
+    }
+    if (errorCode) {
+      console.log(`${source} error:`, errorMessage);
+      Alert.alert('Error', `Could not access ${source}. Please try again.`);
+      return;
+    }
+    if (!assets || assets.length === 0) {
+      console.log(`${source} returned empty assets array.`);
+      Alert.alert('Error', `No photo was selected from ${source}.`);
+      return;
+    }
+    // At this point, we have a valid image
+    const uri = assets[0].uri;
+    setPhoto(uri);
+    console.log(`${source} photo selected:`, uri);
+  };
+
+  /************************************************************
+   * UPLOAD PHOTO
+   ************************************************************/
   const handleUpload = async () => {
     if (!photo) {
-      Alert.alert("Error", "Please select a photo.");
-      console.log("Error: No photo selected.");
+      Alert.alert('Error', 'Please select a photo.');
       return;
     }
 
     // Fetch the token from AsyncStorage
-    const storedToken = await AsyncStorage.getItem('access_token');
+    let storedToken;
+    try {
+      storedToken = await AsyncStorage.getItem('access_token');
+    } catch (error) {
+      console.log('Error reading token from AsyncStorage:', error);
+    }
+
     if (!storedToken) {
-      Alert.alert("Error", "Authorization token is missing.");
-      console.log("Error: No authorization token found.");
+      Alert.alert('Error', 'Authorization token is missing.');
       return;
     }
 
-    console.log("Token retrieved from AsyncStorage:", storedToken);
+    setLoading(true);
 
-    setLoading(true); // Start the loading state
-
+    // Prepare FormData
     const formData = new FormData();
-
-    
-
-
-
     formData.append('file', {
-        uri: photo,
-        type: 'image/jpeg', // You can adjust the type based on the image format (e.g., 'image/png')
-        name: 'profile_photo.jpg',
+      uri: photo,
+      type: 'image/jpeg', // or "image/png" if that fits your file
+      name: 'profile_photo.jpg',
     });
 
     try {
-      console.log("Uploading photo...");
-
+      console.log('Uploading photo...');
       const response = await fetch('http://52.66.69.48:4000/upload?type=PHOTO', {
         method: 'POST',
         headers: {
           'Content-Type': 'multipart/form-data',
-          'Authorization': `Bearer ${storedToken}`, // Attach the token to the request header
+          Authorization: `Bearer ${storedToken}`,
         },
         body: formData,
       });
 
       const data = await response.json();
-      console.log("API response:", data);
+      console.log('API response:', data);
 
       if (response.ok) {
-        // Success: Handle response accordingly
+        // Success
         Alert.alert('Success', 'Photo uploaded successfully');
         console.log('Upload Success:', data);
-        navigation.navigate('AadhaarUploadScreen');
+        navigation.navigate('OuterTripDashboard');
       } else {
-        // Failure: Show error message
+        // Server returned an error or invalid status
         Alert.alert('Error', data.message || 'Something went wrong');
         console.log('Upload Error:', data.message || 'Something went wrong');
       }
     } catch (error) {
-      // Network or other errors
+      // Network or other unexpected error
       Alert.alert('Error', 'Something went wrong. Please try again later.');
       console.log('Network Error:', error);
     } finally {
-      setLoading(false); // End the loading state
-      console.log("Loading finished.");
+      setLoading(false);
     }
   };
 
+  /************************************************************
+   * RENDER
+   ************************************************************/
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Profile Photo</Text>
-      
+
       <Text style={styles.instructionsHeader}>Instructions</Text>
       <Text style={styles.instructions}>
-        • The photo must be colored, clear, and focused with no marks or red eye. {"\n"}
-        • No shadows or reflections with appropriate brightness and contrast. {"\n"}
+        • The photo must be colored, clear, and focused with no marks or red eye.{"\n"}
+        • No shadows or reflections with appropriate brightness and contrast.{"\n"}
         • You shouldn’t wear caps, masks, and goggles.
       </Text>
 
       <View style={styles.noticeBox}>
         <Text style={styles.noticeText}>
-          Your profile photo will be visible to customers when you are assigned to their ride. Make sure it’s a good one.
+          Your profile photo will be visible to customers when you are assigned to their ride.
+          Make sure it’s a good one.
         </Text>
       </View>
 
+      {/* Circle Photo or "Take Photo" */}
       <TouchableOpacity onPress={handlePhotoSelection} style={styles.photoContainer}>
         {photo ? (
           <Image source={{ uri: photo }} style={styles.photo} />
@@ -145,6 +219,7 @@ const ProfilePhotoScreen = ({ navigation }) => {
         )}
       </TouchableOpacity>
 
+      {/* Next/Upload Button */}
       <TouchableOpacity
         style={[styles.nextButton, loading && styles.loadingButton]}
         onPress={handleUpload}
@@ -160,6 +235,9 @@ const ProfilePhotoScreen = ({ navigation }) => {
   );
 };
 
+/************************************************************
+ * STYLES
+ ************************************************************/
 const styles = StyleSheet.create({
   container: {
     flex: 1,

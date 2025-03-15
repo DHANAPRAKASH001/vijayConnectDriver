@@ -93,7 +93,7 @@ const AppNavigator = () => {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName={start ? 'OuterTripDashboard' : 'OuterTripDashboard'}>
+        initialRouteName={start ? 'LoginScreen' : 'LoginScreen'}>
         <Stack.Screen
           name="SplashScreen"
           component={SplashScreen}
