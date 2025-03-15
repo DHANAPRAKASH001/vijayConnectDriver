@@ -1,76 +1,530 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Image, Modal, TextInput, Linking } from 'react-native';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
-import { APP_ICONS } from '../../utils/icons'; // Import the common Icon utility
+import React, {useEffect, useState, useRef} from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  StatusBar,
+  Image,
+  Modal,
+  TextInput,
+  Linking,
+  Alert,
+} from 'react-native';
+import MapView, {PROVIDER_GOOGLE, Marker} from 'react-native-maps';
+import {APP_ICONS} from '../../utils/icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { moderateScale } from 'react-native-size-matters';
 
-const OuterTripDashboard = ({ navigation }) => {
+/************************************************************
+ * Helper: Haversine distance (in meters)
+ * If you want a simpler approximate check, you could do:
+ *   distance = Math.sqrt((lat1-lat2)^2 + (lon1-lon2)^2)
+ * But let's do a basic haversine for better simulation.
+ ************************************************************/
+function getDistanceFromLatLonInM(lat1, lon1, lat2, lon2) {
+  const R = 6371e3; // meters
+  const toRad = x => (x * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const dist = R * c;
+  return dist;
+}
+
+const OuterTripDashboard = ({navigation}) => {
+  /******************************************************************
+   * STATES
+   ******************************************************************/
   const [isOnline, setIsOnline] = useState(false);
-  const [isTripDetailsModalVisible, setTripDetailsModalVisible] = useState(false);
+  const [isTripStarted, setIsTripStarted] = useState(false);
+
+  // Modals & UI flows
+  const [isBookingRequestModalVisible, setBookingRequestModalVisible] =
+    useState(false);
+  const [isReachButtonVisible, setIsReachButtonVisible] = useState(false);
+  const [isStartTripButtonVisible, setIsStartTripButtonVisible] =
+    useState(false);
+  const [isTripDetailsModalVisible, setTripDetailsModalVisible] =
+    useState(false);
   const [isCancelTripModalVisible, setCancelTripModalVisible] = useState(false);
   const [isVerifyOTPModalVisible, setVerifyOTPModalVisible] = useState(false);
-  const [isBookingRequestModalVisible, setBookingRequestModalVisible] = useState(true);
-  const [isReachButtonVisible, setIsReachButtonVisible] = useState(false);
-  const [isStartTripButtonVisible, setIsStartTripButtonVisible] = useState(false);
-  const [isTripStarted, setIsTripStarted] = useState(false);
-  const [isMenuModalVisible, setIsMenuModalVisible] = useState(false); // New state for menu modal
-  const [selectedReason, setSelectedReason] = useState(null); // To track the selected reason
-  const [previousModal, setPreviousModal] = useState(null);
   const [isEndTripModalVisible, setEndTripModalVisible] = useState(false);
-  const [isConfirmationAlertVisible, setConfirmationAlertVisible] = useState(false);
+  const [isConfirmationAlertVisible, setConfirmationAlertVisible] =
+    useState(false);
+  const [isMenuModalVisible, setIsMenuModalVisible] = useState(false);
 
+  // Cancel Trip reason
+  const [selectedReason, setSelectedReason] = useState(null);
+  const [previousModal, setPreviousModal] = useState(null);
+
+  // Interval Refs
+  const rideCheckIntervalRef = useRef(null);
+  const driverLocationIntervalRef = useRef(null);
+
+  // **Driver** location (simulate movement)
+  const [driverLat, setDriverLat] = useState(12.345);
+  const [driverLng, setDriverLng] = useState(67.89);
+
+  // **Booking** location (fixed for simulation)
+  const [bookingLat] = useState(12.355);
+  const [bookingLng] = useState(67.895);
+
+  // Track if we've shown the "reached" alert
+  const [hasReachedSpot, setHasReachedSpot] = useState(false);
+
+  const [availableRides, setAvailableRides] = useState([]);
+
+  /******************************************************************
+   * ON MOUNT - GET TOKEN
+   ******************************************************************/
+  useEffect(() => {
+    (async () => {
+      const storedToken = await AsyncStorage.getItem('access_token');
+      console.log('TOKEN from AsyncStorage:', storedToken);
+    })();
+  }, []);
+
+  /******************************************************************
+   * ONLINE/OFFLINE TOGGLE
+   ******************************************************************/
   const toggleStatus = () => {
-    setIsOnline(!isOnline);
+    const newStatus = !isOnline;
+    setIsOnline(newStatus);
+    if (!newStatus) {
+      // If turning OFFLINE, stop intervals, isAvailable=false
+      stopRideCheckInterval();
+      stopDriverLocationInterval();
+      console.log('Driver went OFFLINE => isAvailable=false');
+    }
   };
 
-  const handleAcceptBooking = () => {
-    setBookingRequestModalVisible(false); // Hide Booking Request modal
-    setIsReachButtonVisible(true); // Show Reach button
+  // Start/Stop ride-check polling when isOnline / isTripStarted changes
+  useEffect(() => {
+    if (isOnline && !isTripStarted) {
+      startRideCheckInterval();
+    } else {
+      stopRideCheckInterval();
+    }
+  }, [isOnline, isTripStarted]);
+
+  /******************************************************************
+   * RIDE CHECK INTERVAL (10 SECONDS) - FOR AVAILABLE RIDES
+   ******************************************************************/
+  const startRideCheckInterval = async () => {
+    stopRideCheckInterval();
+    console.log('Starting 10s interval to poll for rides...');
+    rideCheckIntervalRef.current = setInterval(async () => {
+      try {
+        // const storedToken = await AsyncStorage.getItem('access_token');
+        // if (!storedToken) {
+        //   Alert.alert('Error', 'Authorization token is missing.');
+        //   console.log('Error: No authorization token found.');
+        //   return;
+        // }
+
+        const storedToken =
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZW51bWJlciI6Ijk4NzY1NDMyMTAiLCJzdWIiOjEsImlhdCI6MTc0MTg4ODQxNSwiZXhwIjoxNzU3NDQwNDE1fQ.w1D9NKe-tIuOzdiR7wRbvDfITYQCiJ0fhXg_r38m3wk';
+        if (!storedToken) {
+          Alert.alert('Error', 'Authorization token is missing.');
+          console.log('Error: No authorization token found.');
+          return;
+        }
+
+        const raw = {
+          latitude: '12.9716',
+          longitude: '77.5946',
+          isAvailable: true,
+        };
+
+        console.log(`Sending data to API:`, JSON.stringify(raw));
+
+        const response = await fetch(
+          `http://52.66.69.48:4000/driver-location`,
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'multipart/form-data',
+              Authorization: `Bearer ${storedToken}`, // Attach the token to the request header
+            },
+            body: JSON.stringify(raw), // Ensure body is properly formatted
+          },
+        );
+
+        const data = await response.json();
+        console.log(`API Response [${response.status}]:`, data);
+
+        if (!response.ok) {
+          console.error(
+            `🚨 API Error: ${response.status} - ${response.statusText}`,
+          );
+          console.error(`Response Headers:`, response.headers);
+          throw new Error(data.message || 'Unexpected API error occurred');
+        }
+      } catch (error) {
+        console.error(`❌ Upload Failed:`, {
+          message: error.message,
+          stack: error.stack,
+          error,
+        });
+
+        Alert.alert(
+          'Upload Error',
+          `Failed to update driver location. Please check your network and try again.`,
+        );
+        return false; // If any upload fails, return false
+      }
+
+      // ---------------------------------------------> FETCH AVAILABLE BOOKINGS
+
+      try {
+        // const storedToken = await AsyncStorage.getItem('access_token');
+        // if (!storedToken) {
+        //   Alert.alert('Error', 'Authorization token is missing.');
+        //   console.log('Error: No authorization token found.');
+        //   return;
+        // }
+
+        console.log('======================');
+
+        const storedToken =
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZW51bWJlciI6Ijk4NzY1NDMyMTAiLCJzdWIiOjEsImlhdCI6MTc0MTg4ODQxNSwiZXhwIjoxNzU3NDQwNDE1fQ.w1D9NKe-tIuOzdiR7wRbvDfITYQCiJ0fhXg_r38m3wk';
+        if (!storedToken) {
+          Alert.alert('Error', 'Authorization token is missing.');
+          console.log('Error: No authorization token found.');
+          return;
+        }
+
+        const raw = {
+          latitude: '12345',
+          longitude: '12345',
+          isAvailable: true,
+        };
+
+        console.log(`Sending data to API:`, JSON.stringify(raw));
+
+        const response = await fetch(
+          `http://52.66.69.48:4000/driver-location/available_rides`,
+          {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'multipart/form-data',
+              Authorization: `Bearer ${storedToken}`, // Attach the token to the request header
+            },
+          },
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data || data.length === 0) {
+          console.error('🚨 No available rides or API error');
+          setBookingRequestModalVisible(false);
+          return;
+        }
+
+        // Store trip details and open modal
+        setAvailableRides(data[0]);
+        setBookingRequestModalVisible(true);
+
+        console.log('✅ Trip details updated:', availableRides, data[0]);
+      } catch (error) {
+        console.error(`❌ available_rides Failed:`, {
+          message: error.message,
+          stack: error.stack,
+          error,
+        });
+
+        Alert.alert(
+          'available_rides',
+          `Failed to update driver location. Please check your network and try again.`,
+        );
+        return false; // If any upload fails, return false
+      }
+
+      setBookingRequestModalVisible(true);
+      // In real code, you'd parse the API response, and only open the modal if a ride is actually found
+    }, 10000);
+  };
+
+  const stopRideCheckInterval = () => {
+    if (rideCheckIntervalRef.current) {
+      clearInterval(rideCheckIntervalRef.current);
+      rideCheckIntervalRef.current = null;
+    }
+  };
+
+  /******************************************************************
+   * BOOKING REQUEST HANDLERS
+   ******************************************************************/
+  // const handleAcceptBooking = () => {
+  //   console.log('Driver accepted the booking.');
+  //   setBookingRequestModalVisible(false);
+  //   setIsReachButtonVisible(true);
+  //   setHasReachedSpot(false); // reset if previously reached
+
+  //   // Stop checking for new rides since we have one
+  //   stopRideCheckInterval();
+
+  //   // Per your requirement: once ride is accepted, push location every 5 seconds
+  //   startDriverLocationInterval();
+  // };
+
+  const handleAcceptBooking = async () => {
+    console.log('Attempting to accept booking...');
+
+    const storedToken =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZW51bWJlciI6Ijk4NzY1NDMyMTAiLCJzdWIiOjEsImlhdCI6MTc0MTg4ODQxNSwiZXhwIjoxNzU3NDQwNDE1fQ.w1D9NKe-tIuOzdiR7wRbvDfITYQCiJ0fhXg_r38m3wk';
+
+    if (!storedToken) {
+      Alert.alert('Error', 'Authorization token is missing.');
+      console.error('Error: No authorization token found.');
+      return;
+    }
+
+    try {
+      console.log('Sending API request to accept booking...');
+      const response = await fetch(
+        'http://52.66.69.48:4000/available-rides/accept',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${storedToken}`,
+          },
+          body: JSON.stringify({id: availableRides.id}),
+        },
+      );
+
+      console.log('API response received.');
+
+      const data = await response.json();
+
+      console.log('API Response Data:', data);
+
+      if (!response.status == 200) {
+        throw new Error(
+          data?.message || 'Something went wrong while accepting booking.',
+        );
+      }
+
+      console.log(
+        'Booking accepted successfully. Proceeding with next steps...',
+        data,
+      );
+
+      // Proceed only if API call is successful
+      setBookingRequestModalVisible(false);
+      setIsReachButtonVisible(true);
+      setHasReachedSpot(false); // reset if previously reached
+
+      // Stop checking for new rides since we have one
+      stopRideCheckInterval();
+
+      // Start pushing driver location every 5 seconds
+      startDriverLocationInterval();
+
+      console.log('Driver location tracking started.');
+    } catch (error) {
+      console.error('Error accepting booking:', error);
+      Alert.alert(
+        'Error',
+        error.message || 'Something went wrong. Please try again.',
+      );
+    }
   };
 
   const handleSkipBooking = () => {
-    setBookingRequestModalVisible(false); // Hide Booking Request modal
+    console.log('Driver skipped the booking.');
+    setBookingRequestModalVisible(false);
+    // Keep the 10-second interval running if still online
   };
 
+  /******************************************************************
+   * DRIVER LOCATION INTERVAL (EVERY 5 SECONDS)
+   * Simulate sending location updates to the server & move driver closer to booking
+   ******************************************************************/
+  const startDriverLocationInterval = () => {
+    stopDriverLocationInterval(); // clear old intervals if any
+    console.log('Starting 5s driver-location interval...');
+    driverLocationIntervalRef.current = setInterval(() => {
+      // 1) "Send" location to the API
+      console.log(
+        'Sending driver location => lat:',
+        driverLat,
+        'lng:',
+        driverLng,
+      );
+
+      // 2) Simulate movement TOWARDS the booking spot
+      moveDriverCloserToBooking();
+
+      // 3) Check if we've reached or are very close to the booking spot
+      const distance = getDistanceFromLatLonInM(
+        driverLat,
+        driverLng,
+        bookingLat,
+        bookingLng,
+      );
+      if (distance < 100 && !hasReachedSpot) {
+        // 100 meters threshold => considered "reached"
+        setHasReachedSpot(true);
+        setIsReachButtonVisible(false);
+        setIsStartTripButtonVisible(true);
+        Alert.alert(
+          'Booking spot reached',
+          'You have arrived at the booking spot.',
+        );
+      }
+    }, 5000);
+  };
+
+  const stopDriverLocationInterval = () => {
+    if (driverLocationIntervalRef.current) {
+      clearInterval(driverLocationIntervalRef.current);
+      driverLocationIntervalRef.current = null;
+    }
+  };
+
+  /******************************************************************
+   * Simulate movement: move driver ~25% closer to the booking each update
+   ******************************************************************/
+  const moveDriverCloserToBooking = () => {
+    const factor = 0.25; // how aggressively to move
+    const latDiff = bookingLat - driverLat;
+    const lngDiff = bookingLng - driverLng;
+
+    setDriverLat(prev => prev + latDiff * factor);
+    setDriverLng(prev => prev + lngDiff * factor);
+  };
+
+  /******************************************************************
+   * REACH CUSTOMER -> START TRIP
+   * (You still have this button from old flow, user can press it too)
+   ******************************************************************/
   const handleReachCustomer = () => {
-    // Simulate navigation to Google Maps
-    const customerLocation = "https://www.google.com/maps/dir/?api=1&destination=Customer+Location";
-    Linking.openURL(customerLocation).then(() => {
-      setIsReachButtonVisible(false); // Hide Reach button
-      setIsStartTripButtonVisible(true); // Show Start Trip button
+    console.log('Driver is heading to customer => opening Google Maps.');
+    const customerLocationUrl =
+      'https://www.google.com/maps/dir/?api=1&destination=Customer+Location';
+    Linking.openURL(customerLocationUrl).then(() => {
+      // In your old flow, this toggles start trip button.
+      // But we also do it automatically if we detect near the spot.
+      setIsReachButtonVisible(false);
+      setIsStartTripButtonVisible(true);
     });
   };
 
-  const handleStartTrip = () => {
-    setIsStartTripButtonVisible(false); // Hide Start Trip button
-    setIsTripStarted(true); // Mark trip as started
-    setTripDetailsModalVisible(true); // Show Trip Details modal
+  // const handleStartTrip = () => {
+  //   console.log('Trip started by driver.');
+  //   setIsStartTripButtonVisible(false);
+  //   setIsTripStarted(true);
+  //   setTripDetailsModalVisible(true);
+  //   // We continue the 5-second updates for location
+  //   // In the original code, you started them here, but now we do it at accept.
+  //   // That's fine: either keep it going, or do nothing special here.
+  // };
+
+  const handleStartTrip = async () => {
+    console.log('Attempting to start trip...');
+
+    const storedToken =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZW51bWJlciI6Ijk4NzY1NDMyMTAiLCJzdWIiOjEsImlhdCI6MTc0MTg4ODQxNSwiZXhwIjoxNzU3NDQwNDE1fQ.w1D9NKe-tIuOzdiR7wRbvDfITYQCiJ0fhXg_r38m3wk';
+
+    if (!storedToken) {
+      Alert.alert('Error', 'Authorization token is missing.');
+      console.error('Error: No authorization token found.');
+      return;
+    }
+
+    try {
+      console.log('Sending API request to start trip...');
+      const response = await fetch(
+        `http://52.66.69.48:4000/available-rides/start/${availableRides.id}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${storedToken}`,
+          },
+        },
+      );
+
+      console.log('API response status:', response.status);
+
+      let data;
+      try {
+        data = await response.json();
+        console.log('API Response Data:', data);
+      } catch (jsonError) {
+        console.error('Error parsing response JSON:', jsonError);
+        throw new Error('Invalid response format from server.');
+      }
+
+      if (!response.status == 200) {
+        throw new Error(
+          data?.message || 'Something went wrong while starting trip.',
+        );
+      }
+
+      console.log('Trip started successfully. Proceeding with next steps...');
+
+      // Proceed only if API call is successful
+      setIsStartTripButtonVisible(false);
+      setIsTripStarted(true);
+      setTripDetailsModalVisible(true);
+
+      console.log('Trip UI updated.');
+    } catch (error) {
+      console.error('Error starting trip:', error);
+      Alert.alert(
+        'Error',
+        error.message || 'Something went wrong. Please try again.',
+      );
+    }
   };
 
+  /******************************************************************
+   * TRIP DETAILS -> VERIFY OTP -> END TRIP
+   ******************************************************************/
   const handleTripDetailsComplete = () => {
-    setTripDetailsModalVisible(false); // Close the Trip Details modal
-    setVerifyOTPModalVisible(true); // Show OTP modal
+    setTripDetailsModalVisible(false);
+    setVerifyOTPModalVisible(true);
   };
 
   const handleVerifyOTP = () => {
-    setVerifyOTPModalVisible(false); // Hide OTP modal
-    setEndTripModalVisible(true); // Show End Trip modal
+    console.log('OTP verified, now proceeding to end trip modal.');
+    setVerifyOTPModalVisible(false);
+    setEndTripModalVisible(true);
   };
 
-  const openTripDetailsModal = () => {
-    setPreviousModal('bookingRequest'); // Set the previous modal
-    setTripDetailsModalVisible(true);
-    setBookingRequestModalVisible(false);
+  const endTripCompletely = () => {
+    console.log('Trip ended by driver.');
+    setIsTripStarted(false);
+    stopDriverLocationInterval(); // Stop sending location updates
+
+    setEndTripModalVisible(false);
+    setConfirmationAlertVisible(false);
+
+    // If still online, we can resume ride-check polling
+    if (isOnline) {
+      startRideCheckInterval();
+    }
+
+    // Optionally navigate to a "trip completed" screen
+    navigation.navigate('OuterTripCompletedDetails');
   };
 
+  /******************************************************************
+   * CANCEL TRIP MODAL - as in your original code
+   ******************************************************************/
   const openCancelTripModal = () => {
-    setPreviousModal('tripDetails'); // Set the previous modal
+    setPreviousModal('tripDetails');
     setCancelTripModalVisible(true);
-    setTripDetailsModalVisible(false);
-  };
-
-  const openVerifyOTPModal = () => {
-    setPreviousModal('tripDetails'); // Set the previous modal
-    setVerifyOTPModalVisible(true);
     setTripDetailsModalVisible(false);
   };
 
@@ -78,67 +532,152 @@ const OuterTripDashboard = ({ navigation }) => {
     setCancelTripModalVisible(!isCancelTripModalVisible);
   };
 
+  const handleEndTripBtn = async () => {
+    setConfirmationAlertVisible(true)
+
+
+    console.log('Attempting to start trip...');
+
+    const storedToken =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZW51bWJlciI6Ijk4NzY1NDMyMTAiLCJzdWIiOjEsImlhdCI6MTc0MTg4ODQxNSwiZXhwIjoxNzU3NDQwNDE1fQ.w1D9NKe-tIuOzdiR7wRbvDfITYQCiJ0fhXg_r38m3wk';
+
+    if (!storedToken) {
+      Alert.alert('Error', 'Authorization token is missing.');
+      console.error('Error: No authorization token found.');
+      return;
+    }
+
+    try {
+      console.log('Sending API request to start trip...');
+      const response = await fetch(
+        `http://52.66.69.48:4000/available-rides/end/${availableRides.id}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${storedToken}`,
+          },
+        },
+      );
+
+      console.log('API response status:', response.status);
+
+      let data;
+      try {
+        data = await response.json();
+        console.log('API Response Data:', data);
+      } catch (jsonError) {
+        console.error('Error parsing response JSON:', jsonError);
+        throw new Error('Invalid response format from server.');
+      }
+
+      if (!response.status == 200) {
+        throw new Error(
+          data?.message || 'Something went wrong while starting trip.',
+        );
+      }
+
+      console.log('Trip started successfully. Proceeding with next steps...');
+
+      // Proceed only if API call is successful
+      setIsStartTripButtonVisible(false);
+      setIsTripStarted(true);
+      setTripDetailsModalVisible(true);
+
+      console.log('Trip UI updated.');
+    } catch (error) {
+      console.error('Error starting trip:', error);
+      Alert.alert(
+        'Error',
+        error.message || 'Something went wrong. Please try again.',
+      );
+    }
+
+  }
+  /******************************************************************
+   * RENDER
+   ******************************************************************/
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      {/* Map View */}
+      {/* MAP VIEW */}
       <MapView
         provider={PROVIDER_GOOGLE}
         style={styles.map}
         initialRegion={{
-          latitude: 37.78825,
-          longitude: -122.4324,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
-        }}
-      />
+          latitude: 12.345,
+          longitude: 67.89,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        }}>
+        {/* Driver Marker */}
+        <Marker
+          coordinate={{latitude: driverLat, longitude: driverLng}}
+          title="Driver"
+          description="Your current position">
+          <Image source={APP_ICONS.CAR} style={{width: 30, height: 30}} />
+        </Marker>
+
+        {/* Booking Spot Marker */}
+        <Marker
+          coordinate={{latitude: bookingLat, longitude: bookingLng}}
+          title="Booking Spot"
+          description="Where you need to go"
+          pinColor="green"
+        />
+      </MapView>
 
       {/* Settings Icon (Top Left) */}
       <TouchableOpacity
         style={styles.settingsButton}
-        onPress={() => navigation.navigate('Settings')}
-      >
+        onPress={() => navigation.navigate('Settings')}>
         <Image source={APP_ICONS.MENU} style={styles.icon} />
       </TouchableOpacity>
 
-      {/* Menu Icon (Top Right) */}
+      {/* Menu (Top Right) */}
       <TouchableOpacity
         style={styles.menuButton}
-        onPress={() => setIsMenuModalVisible(true)} // Open the menu modal
-      >
+        onPress={() => setIsMenuModalVisible(true)}>
         <Image source={APP_ICONS.MENU_DOTS} style={styles.icon} />
       </TouchableOpacity>
 
-      {/* Online/Offline Toggle Button (Bottom Left) */}
+      {/* Online/Offline Toggle */}
       <View style={styles.leftBottomContainer}>
         <TouchableOpacity style={styles.statusButton} onPress={toggleStatus}>
-          <Text style={styles.statusText}>{isOnline ? 'Online' : 'Offline'}</Text>
-          <View style={[styles.statusIndicator, { backgroundColor: isOnline ? 'green' : 'red' }]} />
+          <Text style={styles.statusText}>
+            {isOnline ? 'Online' : 'Offline'}
+          </Text>
+          <View
+            style={[
+              styles.statusIndicator,
+              {backgroundColor: isOnline ? 'green' : 'red'},
+            ]}
+          />
         </TouchableOpacity>
       </View>
 
-      {/* Fixed "Outer Trip" Text at Center Top */}
+      {/* Outer Trip Text (Center Top) */}
       <View style={styles.localTripContainer}>
         <Text style={styles.localTripText}>Outer Trip</Text>
       </View>
 
-      {/* Menu Modal */}
+      {/****************************************************************
+        MENU MODAL
+      ****************************************************************/}
       <Modal
-        transparent={true}
+        transparent
         visible={isMenuModalVisible}
-        onRequestClose={() => setIsMenuModalVisible(false)}
-      >
+        onRequestClose={() => setIsMenuModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.menuModalContainer}>
             {/* Sync Option */}
             <TouchableOpacity
               style={styles.menuOption}
               onPress={() => {
-                setIsMenuModalVisible(false); // Close the modal
-                // Add Sync functionality here
-              }}
-            >
+                setIsMenuModalVisible(false);
+                console.log('Sync clicked...');
+              }}>
               <Image source={APP_ICONS.SYNC} style={styles.menuIcon} />
               <Text style={styles.menuOptionText}>Sync</Text>
             </TouchableOpacity>
@@ -147,10 +686,9 @@ const OuterTripDashboard = ({ navigation }) => {
             <TouchableOpacity
               style={styles.menuOption}
               onPress={() => {
-                setIsMenuModalVisible(false); // Close the modal
-                // Add SOS functionality here
-              }}
-            >
+                setIsMenuModalVisible(false);
+                console.log('SOS clicked...');
+              }}>
               <Image source={APP_ICONS.SOS} style={styles.menuIcon} />
               <Text style={styles.menuOptionText}>SOS</Text>
             </TouchableOpacity>
@@ -158,113 +696,77 @@ const OuterTripDashboard = ({ navigation }) => {
         </View>
       </Modal>
 
-      {/* Booking Request Modal */}
+      {/****************************************************************
+        BOOKING REQUEST MODAL
+      ****************************************************************/}
       <Modal
-        transparent={true}
+        transparent
         visible={isBookingRequestModalVisible}
-        onRequestClose={() => setBookingRequestModalVisible(false)}
-      >
+        onRequestClose={() => setBookingRequestModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.bookingRequestModalContainer}>
-            {/* Back Button */}
+            {/* Skip Button */}
             <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => {
-                setBookingRequestModalVisible(false);
-              }}
-            >
-              {/* <Image source={APP_ICONS.BACK} style={styles.backIcon} /> */}
-            </TouchableOpacity>
-
-            {/* Skip Button (Top Right) */}
-            <TouchableOpacity style={styles.skipButton} onPress={handleSkipBooking}>
+              style={styles.skipButton}
+              onPress={handleSkipBooking}>
               <Text style={styles.skipButtonText}>Skip</Text>
             </TouchableOpacity>
 
-            {/* Modal Header */}
             <Text style={styles.modalHeader}>Booking Request</Text>
 
-            {/* Booking Information */}
+            {/* Demo booking info */}
             <View style={styles.bookingInfoContainer}>
-              {/* Outer Trip */}
               <View style={styles.bookingInfoRow}>
-                <View style={[styles.iconBox, { backgroundColor: '#28a745' }]}></View>
-                <Text style={styles.bookingInfoText1}>Outer Trip</Text>
+                <Text style={styles.bookingInfoText}>Outer Trip</Text>
               </View>
-
-              {/* Fare */}
               <View style={styles.bookingInfoRow}>
-                <View style={[styles.iconBox, { backgroundColor: '#ff4444' }]}></View>
-                <Text style={styles.bookingInfoText}>$217.86</Text>
-              </View>
-
-              {/* Distance and Payment Mode */}
-              <View style={styles.bookingInfoRow}>
-                <Text style={styles.bookingInfoText}>0.1 Km/Cash</Text>
-              </View>
-
-              {/* Pickup Location with Background */}
-              <View style={[styles.bookingInfoRow, styles.locationBackground]}>
-                <View style={[styles.iconBox, { backgroundColor: '' }]}>
-                  <Image source={APP_ICONS.CIRCLE_GREEN} style={styles.bookingIcon} />
-                </View>
-                <Text style={styles.bookingInfoText}>Coimbatore International Airport,</Text>
-              </View>
-
-              {/* Pickup Time */}
-              <View style={styles.bookingInfoRow}>
-                <Text style={styles.bookingInfoText}>21 Jun 2024, 03:41 PM</Text>
-              </View>
-
-              {/* Drop Location with Background */}
-              <View style={[styles.bookingInfoRow, styles.locationBackground]}>
-                <View style={[styles.iconBox, { backgroundColor: '' }]}>
-                  <Image source={APP_ICONS.CIRCLE_RED} style={styles.bookingIcon} />
-                </View>
-                <Text style={styles.bookingInfoText}>Gandhipuram New Bus Stand</Text>
-              </View>
-
-              {/* Remaining Bids */}
-              <View style={styles.bookingInfoRow}>
-                <Text style={styles.bookingInfoText}>Remaining Bids: 03</Text>
+                <Text style={styles.bookingInfoText}>
+                  {`${availableRides?.estimatedFair} / ${availableRides?.distance}`}
+                </Text>
               </View>
             </View>
 
-            {/* Accept Booking Button */}
-            <TouchableOpacity style={styles.acceptBookingButton} onPress={handleAcceptBooking}>
+            <TouchableOpacity
+              style={styles.acceptBookingButton}
+              onPress={handleAcceptBooking}>
               <Text style={styles.acceptBookingButtonText}>ACCEPT BOOKING</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Reach Button */}
+      {/****************************************************************
+        REACH + START TRIP BUTTONS
+      ****************************************************************/}
       {isReachButtonVisible && (
         <View style={styles.reachButtonContainer}>
-          <TouchableOpacity style={styles.reachButton} onPress={handleReachCustomer}>
+          <TouchableOpacity
+            style={styles.reachButton}
+            onPress={handleReachCustomer}>
             <Text style={styles.reachButtonText}>Reach</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* Start Trip Button */}
       {isStartTripButtonVisible && (
         <View style={styles.startTripContainer}>
-          <TouchableOpacity style={styles.startTripButton} onPress={handleStartTrip}>
+          <TouchableOpacity
+            style={styles.startTripButton}
+            onPress={handleStartTrip}>
             <Text style={styles.startTripButtonText}>Start Trip</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* Trip Details Modal */}
+      {/****************************************************************
+        TRIP DETAILS MODAL
+      ****************************************************************/}
       <Modal
-        transparent={true}
+        transparent
         visible={isTripDetailsModalVisible}
-        onRequestClose={() => setTripDetailsModalVisible(false)}
-      >
+        onRequestClose={() => setTripDetailsModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.tripDetailsModalContainer}>
-            {/* Back Button */}
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => {
@@ -272,56 +774,56 @@ const OuterTripDashboard = ({ navigation }) => {
                 if (previousModal === 'bookingRequest') {
                   setBookingRequestModalVisible(true);
                 }
-              }}
-            >
+              }}>
               <Image source={APP_ICONS.BACK} style={styles.backIcon} />
             </TouchableOpacity>
-            {/* Modal Header */}
+
             <Text style={styles.tripDetailsHeader}>Trip Info</Text>
 
-            {/* Trip Details Button */}
+            {/* Trip Details Button => e.g. navigate to a screen */}
             <TouchableOpacity
               style={styles.tripDetailsButton}
               onPress={() => {
-                setTripDetailsModalVisible(false); // Close the modal before navigating
+                setTripDetailsModalVisible(false);
                 navigation.navigate('TripCompleteDetails', {
-                  onGoBack: () => setTripDetailsModalVisible(true), // Callback to reopen the modal
+                  onGoBack: () => setTripDetailsModalVisible(true),
                 });
-              }}
-            >
+              }}>
               <Image source={APP_ICONS.INFO} style={styles.buttonIcon} />
               <Text style={styles.tripDetailsButtonText}>Trip Details</Text>
             </TouchableOpacity>
 
             {/* Cancel Trip Button */}
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={styles.cancelTripButtonInModal}
-              onPress={() => setCancelTripModalVisible(true)} // Open the Cancel Trip Modal
+              onPress={() => {
+                setCancelTripModalVisible(true);
+                setTripDetailsModalVisible(false);
+              }}
             >
               <Image source={APP_ICONS.CANCEL} style={styles.buttonIcon} />
               <Text style={styles.cancelTripButtonText}>Cancel Trip</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
-            {/* Next Button to Proceed to OTP Verification */}
+            {/* Next => verify OTP */}
             <TouchableOpacity
               style={styles.nextButton}
-              onPress={handleTripDetailsComplete} // Proceed to OTP verification
-            >
+              onPress={handleTripDetailsComplete}>
               <Text style={styles.nextButtonText}>Next</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Cancel Trip Modal */}
+      {/****************************************************************
+        CANCEL TRIP MODAL
+      ****************************************************************/}
       <Modal
-        transparent={true}
+        transparent
         visible={isCancelTripModalVisible}
-        onRequestClose={() => setCancelTripModalVisible(false)}
-      >
+        onRequestClose={() => setCancelTripModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.cancelTripModalContainer}>
-            {/* Back Button */}
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => {
@@ -329,68 +831,77 @@ const OuterTripDashboard = ({ navigation }) => {
                 if (previousModal === 'tripDetails') {
                   setTripDetailsModalVisible(true);
                 }
-              }}
-            >
+              }}>
               <Image source={APP_ICONS.BACK} style={styles.backIcon} />
             </TouchableOpacity>
 
-            {/* Modal Header */}
-            <Text style={styles.cancelTripModalHeader}>Cancel Trip - Reason</Text>
+            <Text style={styles.cancelTripModalHeader}>
+              Cancel Trip - Reason
+            </Text>
             <Text style={styles.cancelTripModalSubHeader}>
-              To Confirm the reason VijayConnect Team Will Reach you over Phone call
+              To confirm the reason, our Team will reach you over Phone call
             </Text>
 
             {/* Reason Options */}
             <TouchableOpacity
               style={[
                 styles.reasonButton,
-                selectedReason === 'No response' && styles.selectedReasonButton, // Highlight if selected
+                selectedReason === 'No response' && styles.selectedReasonButton,
               ]}
-              onPress={() => setSelectedReason('No response')}
-            >
+              onPress={() => setSelectedReason('No response')}>
               <Text style={styles.reasonButtonText}>No response</Text>
               {selectedReason === 'No response' && (
-                <Image source={APP_ICONS.CHECKMARK} style={styles.checkmarkIcon} /> // Show checkmark if selected
+                <Image
+                  source={APP_ICONS.CHECKMARK}
+                  style={styles.checkmarkIcon}
+                />
               )}
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[
                 styles.reasonButton,
-                selectedReason === 'Request to cancel' && styles.selectedReasonButton, // Highlight if selected
+                selectedReason === 'Request to cancel' &&
+                  styles.selectedReasonButton,
               ]}
-              onPress={() => setSelectedReason('Request to cancel')}
-            >
+              onPress={() => setSelectedReason('Request to cancel')}>
               <Text style={styles.reasonButtonText}>Request to cancel</Text>
               {selectedReason === 'Request to cancel' && (
-                <Image source={APP_ICONS.CHECKMARK} style={styles.checkmarkIcon} /> // Show checkmark if selected
+                <Image
+                  source={APP_ICONS.CHECKMARK}
+                  style={styles.checkmarkIcon}
+                />
               )}
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[
                 styles.reasonButton,
-                selectedReason === 'Time change' && styles.selectedReasonButton, // Highlight if selected
+                selectedReason === 'Time change' && styles.selectedReasonButton,
               ]}
-              onPress={() => setSelectedReason('Time change')}
-            >
+              onPress={() => setSelectedReason('Time change')}>
               <Text style={styles.reasonButtonText}>Time change</Text>
               {selectedReason === 'Time change' && (
-                <Image source={APP_ICONS.CHECKMARK} style={styles.checkmarkIcon} /> // Show checkmark if selected
+                <Image
+                  source={APP_ICONS.CHECKMARK}
+                  style={styles.checkmarkIcon}
+                />
               )}
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[
                 styles.reasonButton,
-                selectedReason === 'Others' && styles.selectedReasonButton, // Highlight if selected
+                selectedReason === 'Others' && styles.selectedReasonButton,
               ]}
-              onPress={() => setSelectedReason('Others')}
-            >
+              onPress={() => setSelectedReason('Others')}>
               <Text style={styles.reasonButtonText}>Others</Text>
               {selectedReason === 'Others' && (
                 <>
-                  <Image source={APP_ICONS.CHECKMARK} style={styles.checkmarkIcon} /> {/* Show checkmark if selected */}
+                  <Image
+                    source={APP_ICONS.CHECKMARK}
+                    style={styles.checkmarkIcon}
+                  />
                   <TextInput
                     style={styles.othersInput}
                     placeholder="e.g Schedule change"
@@ -405,24 +916,23 @@ const OuterTripDashboard = ({ navigation }) => {
               style={styles.submitButton}
               onPress={() => {
                 console.log('Selected Reason:', selectedReason);
-                setCancelTripModalVisible(false); // Close the modal
-              }}
-            >
+                setCancelTripModalVisible(false);
+              }}>
               <Text style={styles.submitButtonText}>Submit</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Verify OTP Modal */}
+      {/****************************************************************
+        VERIFY OTP MODAL
+      ****************************************************************/}
       <Modal
-        transparent={true}
+        transparent
         visible={isVerifyOTPModalVisible}
-        onRequestClose={() => setVerifyOTPModalVisible(false)}
-      >
+        onRequestClose={() => setVerifyOTPModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.verifyOTPModalContainer}>
-            {/* Back Button */}
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => {
@@ -430,15 +940,15 @@ const OuterTripDashboard = ({ navigation }) => {
                 if (previousModal === 'tripDetails') {
                   setTripDetailsModalVisible(true);
                 }
-              }}
-            >
+              }}>
               <Image source={APP_ICONS.BACK} style={styles.backIcon} />
             </TouchableOpacity>
 
             <Text style={styles.modalHeader}>Verify OTP</Text>
-            <Text style={styles.modalSubHeader}>Please Enter the OTP Sent to your Phone</Text>
+            <Text style={styles.modalSubHeader}>
+              Please Enter the OTP Sent to your Phone
+            </Text>
 
-            {/* OTP Input Field */}
             <TextInput
               style={styles.otpInput}
               placeholder="Enter OTP"
@@ -446,18 +956,15 @@ const OuterTripDashboard = ({ navigation }) => {
               keyboardType="number-pad"
             />
 
-            {/* Cancel and Verify Buttons */}
             <View style={styles.buttonContainer}>
               <TouchableOpacity
                 style={styles.cancelButton}
-                onPress={() => setVerifyOTPModalVisible(false)}
-              >
+                onPress={() => setVerifyOTPModalVisible(false)}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.verifyButton}
-                onPress={handleVerifyOTP}
-              >
+                onPress={handleVerifyOTP}>
                 <Text style={styles.verifyButtonText}>Verify</Text>
               </TouchableOpacity>
             </View>
@@ -465,59 +972,52 @@ const OuterTripDashboard = ({ navigation }) => {
         </View>
       </Modal>
 
-      {/* End Trip Modal */}
-      <Modal
-        transparent={true}
+      {/****************************************************************
+        END TRIP MODAL
+      ****************************************************************/}
+      {/* <Modal
+        transparent
         visible={isEndTripModalVisible}
-        onRequestClose={() => setEndTripModalVisible(false)}
-      >
+        onRequestClose={() => setEndTripModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.endTripModalContainer}>
-            {/* Driver Name */}
-            <Text style={styles.endTripModalHeader}>Krish</Text>
+            
 
-            {/* Trip Details with Light Gray Background */}
-            <View style={styles.tripDetailsContainer}>
-              <Text style={styles.tripDetailText}>Oh 0m / 0.0 Kms / $217.86</Text>
-            </View>
-
-            {/* End Trip Button */}
-            <TouchableOpacity
-              style={styles.endTripButton}
-              onPress={() => setConfirmationAlertVisible(true)} // Open the confirmation alert
-            >
-              <Text style={styles.endTripButtonText}>End Trip</Text>
-            </TouchableOpacity>
+          
           </View>
         </View>
-      </Modal>
+      </Modal> */}
 
-      {/* Confirmation Alert Modal */}
+<View style={{   position: 'absolute', width: '100%', bottom: 10, alignItems: 'center'
+}}>
+<TouchableOpacity
+              style={styles.endTripButton}
+              onPress={() => setConfirmationAlertVisible(true)}>
+              <Text style={styles.endTripButtonText}>End Trip</Text>
+            </TouchableOpacity>
+</View>
+
+      {/****************************************************************
+        CONFIRMATION ALERT MODAL
+      ****************************************************************/}
       <Modal
-        transparent={true}
+        transparent
         visible={isConfirmationAlertVisible}
-        onRequestClose={() => setConfirmationAlertVisible(false)}
-      >
+        onRequestClose={() => setConfirmationAlertVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.confirmationAlertContainer}>
-            {/* Confirmation Message */}
-            <Text style={styles.confirmationAlertText}>Are you sure you want to End the Trip?</Text>
-
-            {/* Cancel and End Trip Buttons */}
+            <Text style={styles.confirmationAlertText}>
+              Are you sure you want to End the Trip?
+            </Text>
             <View style={styles.confirmationButtonContainer}>
               <TouchableOpacity
                 style={styles.cancelButton}
-                onPress={() => setConfirmationAlertVisible(false)}
-              >
+                onPress={handleEndTripBtn}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.confirmButton}
-                onPress={() => {
-                  setConfirmationAlertVisible(false); // Close the confirmation alert
-                  navigation.navigate('OuterTripCompletedDetails'); // Navigate to Trip Completed Screen
-                }}
-              >
+                onPress={handleEndTripBtn}>
                 <Text style={styles.confirmButtonText}>End Trip</Text>
               </TouchableOpacity>
             </View>
@@ -528,6 +1028,9 @@ const OuterTripDashboard = ({ navigation }) => {
   );
 };
 
+/************************************************************************
+ * STYLES (Mostly the same as your original)
+ ************************************************************************/
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -547,13 +1050,13 @@ const styles = StyleSheet.create({
     resizeMode: 'contain',
   },
   selectedReasonButton: {
-    backgroundColor: '#e0f7fa', // Light blue background for selected option
+    backgroundColor: '#e0f7fa',
   },
   checkmarkIcon: {
     width: 16,
     height: 16,
     marginLeft: 10,
-    tintColor: '#007BFF', // Blue color for the checkmark
+    tintColor: '#007BFF',
   },
   cancelTripModalContainer: {
     backgroundColor: '#fff',
@@ -619,7 +1122,7 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 24,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.8,
     shadowRadius: 2,
     elevation: 5,
@@ -632,12 +1135,6 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-  },
-  locationBackground: {
-    backgroundColor: '#f0f0f0',
-    borderRadius: 5,
-    padding: 10,
-    marginBottom: 10,
   },
   settingsButton: {
     position: 'absolute',
@@ -671,12 +1168,11 @@ const styles = StyleSheet.create({
     padding: 13,
     borderRadius: 50,
     width: '40%',
-    // alignItems: 'center',
     textAlign: 'center',
     color: 'white',
     fontSize: 20,
     fontWeight: 'bold',
-    },
+  },
   reachButtonContainer: {
     position: 'absolute',
     bottom: 100,
@@ -754,16 +1250,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
-  },
-  bookingIcon: {
-    width: 16,
-    height: 16,
-    marginRight: 10,
-  },
-  bookingInfoText1: {
-    paddingLeft: 90,
-    fontSize: 20,
-    color: '#000',
   },
   bookingInfoText: {
     fontSize: 16,
@@ -861,20 +1347,6 @@ const styles = StyleSheet.create({
     color: '#000',
     marginLeft: 10,
   },
-  callCustomerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#28a745',
-    padding: 15,
-    borderRadius: 5,
-    width: '100%',
-    marginBottom: 10,
-  },
-  callCustomerButtonText: {
-    color: 'white',
-    fontSize: 18,
-    marginLeft: 10,
-  },
   cancelTripButtonInModal: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -914,7 +1386,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
+    shadowOffset: {width: 0, height: -2},
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
@@ -945,10 +1417,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#007bff',
     padding: 15,
     borderRadius: 10,
-    width: '100%',
+    width: '94%',
     alignItems: 'center',
     shadowColor: '#007bff',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
@@ -967,7 +1439,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
+    shadowOffset: {width: 0, height: -2},
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
@@ -980,19 +1452,6 @@ const styles = StyleSheet.create({
   confirmationButtonContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-  },
-  cancelButton: {
-    backgroundColor: '#ccc',
-    padding: 15,
-    borderRadius: 10,
-    flex: 1,
-    marginRight: 10,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    color: '#000',
-    fontSize: 18,
-    fontWeight: 'bold',
   },
   confirmButton: {
     backgroundColor: '#007bff',
@@ -1007,33 +1466,31 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
-
-  // sos cs
   menuModalContainer: {
     backgroundColor: '#fff',
-    borderTopLeftRadius: 20, // Rounded corners at the top
+    borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
-    width: '100%', // Full width
-    maxHeight: '30%', // Adjust height as needed
+    width: '100%',
+    maxHeight: '30%',
   },
   menuOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 15, // Vertical padding for each option
-    borderBottomWidth: 1, // Add a separator line
-    borderBottomColor: '#f0f0f0', // Light gray separator
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
   menuIcon: {
     width: 24,
     height: 24,
-    marginRight: 15, // Space between icon and text
+    marginRight: 15,
     resizeMode: 'contain',
   },
   menuOptionText: {
     fontSize: 18,
-    color: '#000', // Black text
-    fontWeight: '500', // Medium font weight
+    color: '#000',
+    fontWeight: '500',
   },
 });
 

@@ -63,7 +63,7 @@ const OtpScreen = ({ navigation, route }) => {
     if (enteredOtp.length === 4) {
       setIsLoading(true); // Start loading
   
-      const apiUrl = 'https://1b3fnd11-4000.inc1.devtunnels.ms/auth/login'; // Provided API URL
+      const apiUrl = 'http://52.66.69.48:4000/auth/login'; // Provided API URL
   
       console.log("________________________", phoneNumber)
       try {

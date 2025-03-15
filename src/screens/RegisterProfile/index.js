@@ -49,7 +49,7 @@ const RegisterProfile = () => {
         return;
       }
 
-      const response = await fetch('https://1b3fnd11-4000.inc1.devtunnels.ms/driver', {
+      const response = await fetch('http://52.66.69.48:4000/driver', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

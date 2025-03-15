@@ -36,7 +36,7 @@ function PhoneNumberScreen({navigation}) {
     }
 
     const fullPhoneNumber = `+${countryCode}${phoneNumber}`;
-    const apiUrl = 'https://1b3fnd11-4000.inc1.devtunnels.ms/auth/otp'; // Replace with your actual API URL
+    const apiUrl = 'http://52.66.69.48:4000/auth/otp'; // Replace with your actual API URL
 
     try {
       // API POST request
@@ -64,6 +64,7 @@ function PhoneNumberScreen({navigation}) {
       }
     } catch (error) {
       // Network or other errors
+      console.log(error, "error in send otp api")
       Alert.alert('Error', 'Something went wrong. Please try again later.');
     }
   };

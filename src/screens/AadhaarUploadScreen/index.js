@@ -95,7 +95,7 @@ const AadhaarUploadScreen = ({ navigation }) => {
       });
 
       try {
-        const response = await fetch(`https://1b3fnd11-4000.inc1.devtunnels.ms/upload?type=${type}`, {
+        const response = await fetch(`http://52.66.69.48:4000/upload?type=${type}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'multipart/form-data',

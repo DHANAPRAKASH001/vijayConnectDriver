@@ -294,13 +294,13 @@ const RentalTripDashboard = ({ navigation }) => {
             </TouchableOpacity>
 
             {/* Cancel Trip Button */}
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={styles.cancelTripButtonInModal}
               onPress={() => setCancelTripModalVisible(true)} // Open the Cancel Trip Modal
             >
               <Image source={APP_ICONS.CANCEL} style={styles.buttonIcon} />
               <Text style={styles.cancelTripButtonText}>Cancel Trip</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
             {/* Next Button to Proceed to OTP Verification */}
             <TouchableOpacity

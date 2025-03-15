@@ -88,7 +88,7 @@ const ProfilePhotoScreen = ({ navigation }) => {
     try {
       console.log("Uploading photo...");
 
-      const response = await fetch('https://1b3fnd11-4000.inc1.devtunnels.ms/upload?type=PHOTO', {
+      const response = await fetch('http://52.66.69.48:4000/upload?type=PHOTO', {
         method: 'POST',
         headers: {
           'Content-Type': 'multipart/form-data',

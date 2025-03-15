@@ -101,7 +101,7 @@ const DriverLicenseUploadScreen = ({ navigation }) => {
       });
 
       try {
-        const response = await fetch(`https://1b3fnd11-4000.inc1.devtunnels.ms/upload?type=${type}`, {
+        const response = await fetch(`http://52.66.69.48:4000/upload?type=${type}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'multipart/form-data',
@@ -132,7 +132,7 @@ const DriverLicenseUploadScreen = ({ navigation }) => {
       if (isFrontUploaded && isBackUploaded) {
         Alert.alert('Success', 'Both images uploaded successfully.');
         console.log('Both images uploaded successfully');
-        navigation.navigate('NextScreen'); // Navigate to the next screen
+        navigation.navigate('ProfilePhotoScreen'); // Navigate to the next screen
       } else {
         Alert.alert('Error', 'Failed to upload one or more images.');
         console.log('One or both image uploads failed.');
